@@ -6,7 +6,7 @@ import {
   LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip, CartesianGrid,
   PieChart, Pie, Cell, Legend
 } from "recharts";
-import { Building2, Wallet, Receipt, Nfc, QrCode, WifiOff, CloudUpload, TrendingUp } from "lucide-react";
+import { Building2, Wallet, Receipt, Nfc, QrCode, WifiOff, CloudUpload, TrendingUp, Banknote } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 
 const rp = (n) => "Rp " + Number(n || 0).toLocaleString("id-ID");
@@ -64,6 +64,7 @@ export default function AdminDashboard() {
   const pieData = [
     { name: "NFC", value: d.nfc_count, color: "#7E22CE" },
     { name: "QRIS", value: d.qris_count, color: "#1E40AF" },
+    { name: "Tunai", value: d.cash_count, color: "#047857" },
   ];
 
   return (
@@ -82,6 +83,7 @@ export default function AdminDashboard() {
         <Stat label="Nilai Hari Ini" value={rp(d.txn_total_today)} icon={TrendingUp} tint="#E6A100" />
         <Stat label="Transaksi NFC" value={d.nfc_count} icon={Nfc} tint="#7E22CE" />
         <Stat label="Transaksi QRIS" value={d.qris_count} icon={QrCode} tint="#1E40AF" />
+        <Stat label="Transaksi Tunai" value={d.cash_count} icon={Banknote} tint="#047857" />
         <Stat label="Menunggu Sinkron" value={d.pending_sync} icon={CloudUpload} tint="#DC2626" />
         <Stat label="Total Saldo" value={rp(d.total_balance)} icon={Wallet} tint="#0A3663" />
       </div>

@@ -11,7 +11,7 @@ import { toast } from "sonner";
 
 const rp = (n) => "Rp " + Number(n || 0).toLocaleString("id-ID");
 
-const empty = { name: "", description: "", category: "Umum", price: 0, stock: 0, image: null };
+const empty = { name: "", description: "", category: "Umum", price: 0, stock: 0, barcode: "", image: null };
 const MAX_PRODUCT_IMAGE_LENGTH = 55_000;
 
 async function compressProductImage(file) {
@@ -67,7 +67,7 @@ export default function Products() {
   });
 
   const openNew = () => { setForm(empty); setEditing(null); setOpen(true); };
-  const openEdit = (p) => { setForm({ name: p.name, description: p.description || "", category: p.category, price: p.price, stock: p.stock, image: p.image }); setEditing(p.id); setOpen(true); };
+  const openEdit = (p) => { setForm({ name: p.name, description: p.description || "", category: p.category, price: p.price, stock: p.stock, barcode: p.barcode || "", image: p.image }); setEditing(p.id); setOpen(true); };
 
   const handleImageChange = async (event) => {
     const file = event.target.files?.[0];
@@ -84,7 +84,7 @@ export default function Products() {
 
   const save = async (e) => {
     e.preventDefault();
-    const body = { ...form, price: Number(form.price), stock: Number(form.stock) };
+    const body = { ...form, barcode: form.barcode.trim() || null, price: Number(form.price), stock: Number(form.stock) };
     try {
       if (editing) await api.put(`/umkm/products/${editing}`, body);
       else await api.post("/umkm/products", body);
@@ -113,6 +113,21 @@ export default function Products() {
               <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white p-5 shadow-lg">
                 <h2 className="text-lg font-semibold text-slate-900">{editing ? "Edit Produk" : "Tambah Produk"}</h2>
             <form onSubmit={save} className="space-y-3">
+              <div>
+                <Label htmlFor="product-barcode">Kode barcode</Label>
+                <Input
+                  id="product-barcode"
+                  data-testid="product-barcode"
+                  aria-label="Kode barcode produk"
+                  autoFocus={!editing}
+                  autoComplete="off"
+                  placeholder="Scan atau masukkan kode barang"
+                  value={form.barcode}
+                  onChange={e => setForm({ ...form, barcode: e.target.value })}
+                  onKeyDown={e => { if (e.key === "Enter") e.preventDefault(); }}
+                />
+                <p className="mt-1 text-xs text-slate-500">Fokuskan kolom ini, lalu scan kode barang dengan scanner.</p>
+              </div>
               <div><Label>Nama</Label><Input required value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></div>
               <div><Label>Kategori</Label><Input value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} /></div>
               <div className="grid grid-cols-2 gap-3">
@@ -194,6 +209,7 @@ export default function Products() {
           <TableHeader>
             <TableRow>
               <TableHead>Nama</TableHead>
+              <TableHead>Barcode</TableHead>
               <TableHead>Kategori</TableHead>
               <TableHead className="text-right">Harga</TableHead>
               <TableHead className="text-right">Stok</TableHead>
@@ -212,6 +228,7 @@ export default function Products() {
                     {p.name}
                   </div>
                 </TableCell>
+                <TableCell className="font-mono text-sm">{p.barcode || "-"}</TableCell>
                 <TableCell>{p.category}</TableCell>
                 <TableCell className="text-right font-mono">{rp(p.price)}</TableCell>
                 <TableCell className="text-right">{p.stock}</TableCell>
@@ -229,7 +246,7 @@ export default function Products() {
             ))}
             {filteredProducts.length === 0 && (
               <TableRow>
-                <TableCell colSpan="6" className="py-10 text-center text-slate-500">
+                <TableCell colSpan="7" className="py-10 text-center text-slate-500">
                   Tidak ada produk yang cocok dengan pencarian.
                 </TableCell>
               </TableRow>

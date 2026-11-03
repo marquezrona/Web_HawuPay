@@ -50,6 +50,12 @@ export default function Receipt({ txn, onNew }) {
               <span>{rp(txn.customer_balance)}</span>
             </div>
           )}
+          {txn.payment_method === "TUNAI" && txn.cash_received != null && (
+            <>
+              <div className="flex justify-between"><span className="text-slate-500">Uang diterima</span><span>{rp(txn.cash_received)}</span></div>
+              <div className="flex justify-between font-semibold"><span className="text-slate-500">Kembalian</span><span>{rp(txn.change_amount)}</span></div>
+            </>
+          )}
           <div className="flex justify-between"><span className="text-slate-500">Status</span>
             <span className={`font-semibold ${txn.sync_status === "SYNCED" ? "text-emerald-600" : "text-amber-600"}`}>
               {txn.sync_status === "SYNCED" ? "SYNCED" : "OFFLINE (menunggu sync)"}

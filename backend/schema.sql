@@ -43,12 +43,14 @@ CREATE TABLE IF NOT EXISTS products (
     price DECIMAL(14,2) NOT NULL DEFAULT 0,
     stock INT NOT NULL DEFAULT 0,
     image TEXT NULL,
+    barcode VARCHAR(128) NULL,
     approval_status VARCHAR(32) NULL,
     approval_note TEXT NULL,
     approved_at VARCHAR(40) NULL,
     approved_by VARCHAR(36) NULL,
     created_at VARCHAR(40) NOT NULL,
-    INDEX ix_products_umkm_id (umkm_id)
+    INDEX ix_products_umkm_id (umkm_id),
+    UNIQUE KEY uq_products_umkm_barcode (umkm_id, barcode)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS customers (
@@ -73,6 +75,8 @@ CREATE TABLE IF NOT EXISTS transactions (
     discount DECIMAL(14,2) NOT NULL DEFAULT 0,
     total DECIMAL(14,2) NOT NULL,
     payment_method VARCHAR(32) NOT NULL,
+    cash_received DECIMAL(14,2) NULL,
+    change_amount DECIMAL(14,2) NULL,
     customer_id VARCHAR(36) NULL,
     nfc_card_id VARCHAR(255) NULL,
     device_id VARCHAR(255) NULL,

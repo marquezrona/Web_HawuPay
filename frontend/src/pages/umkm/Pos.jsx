@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, signTransaction, getDeviceId } from "@/lib/api";
 import { cacheProducts, getCachedProducts, queueOfflineTxn } from "@/lib/db";
 import { useOffline } from "@/context/OfflineContext";
@@ -7,9 +7,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Search, Plus, Minus, Trash2, ShoppingBag, Nfc, QrCode, Package, X } from "lucide-react";
+import { Search, ScanLine, Plus, Minus, Trash2, ShoppingBag, Nfc, QrCode, Package, X, Banknote } from "lucide-react";
 import NfcModal from "@/components/NfcModal";
 import QrisModal from "@/components/QrisModal";
+import CashModal from "@/components/CashModal";
 import Receipt from "@/components/Receipt";
 import { toast } from "sonner";
 
@@ -19,10 +20,13 @@ export default function Pos() {
   const [products, setProducts] = useState([]);
   const [cart, setCart] = useState([]);
   const [q, setQ] = useState("");
+  const [scanCode, setScanCode] = useState("");
   const [cat, setCat] = useState("all");
   const [nfcOpen, setNfcOpen] = useState(false);
   const [qrisOpen, setQrisOpen] = useState(false);
+  const [cashOpen, setCashOpen] = useState(false);
   const [receipt, setReceipt] = useState(null);
+  const barcodeInputRef = useRef(null);
   const { online } = useOffline();
 
   const load = async () => {
@@ -36,6 +40,9 @@ export default function Pos() {
     }
   };
   useEffect(() => { load(); }, []);
+  useEffect(() => {
+    if (!receipt) barcodeInputRef.current?.focus();
+  }, [receipt]);
 
   const categories = useMemo(() => ["all", ...new Set(products.map(p => p.category || "Umum"))], [products]);
   const filtered = useMemo(() =>
@@ -52,6 +59,22 @@ export default function Pos() {
       return [...prev, { product_id: p.id, name: p.name, price: p.price, qty: 1 }];
     });
   };
+  const handleBarcodeScan = (event) => {
+    event.preventDefault();
+    const code = scanCode.trim().toUpperCase();
+    if (!code) return;
+
+    const product = products.find(p => (p.barcode || "").trim().toUpperCase() === code);
+    setScanCode("");
+    if (!product) {
+      toast.error("Barcode tidak ditemukan pada produk yang disetujui");
+      barcodeInputRef.current?.focus();
+      return;
+    }
+
+    addToCart(product);
+    barcodeInputRef.current?.focus();
+  };
   const dec = (id) => setCart(prev => prev.flatMap(x => x.product_id === id ? (x.qty > 1 ? [{ ...x, qty: x.qty - 1 }] : []) : [x]));
   const inc = (id) => setCart(prev => prev.map(x => x.product_id === id ? { ...x, qty: x.qty + 1 } : x));
   const removeItem = (id) => setCart(prev => prev.filter(x => x.product_id !== id));
@@ -59,7 +82,7 @@ export default function Pos() {
   const subtotal = cart.reduce((s, x) => s + x.price * x.qty, 0);
   const total = subtotal;
 
-  const submitTransaction = async ({ paymentMethod, nfcCardId, customerId }) => {
+  const submitTransaction = async ({ paymentMethod, nfcCardId, customerId, cashReceived, changeAmount }) => {
     if (cart.length === 0) return;
     const clientTxnId = crypto.randomUUID();
     const deviceId = getDeviceId();
@@ -73,6 +96,7 @@ export default function Pos() {
       payment_method: paymentMethod,
       customer_id: customerId || null,
       nfc_card_id: nfcCardId || null,
+      ...(paymentMethod === "TUNAI" ? { cash_received: cashReceived } : {}),
       device_id: deviceId,
       nonce,
       created_at_client: createdAt,
@@ -82,7 +106,13 @@ export default function Pos() {
     if (!online) {
       payload.offline = true;
       await queueOfflineTxn(payload);
-      const localTxn = { ...payload, id: `OFFLINE-${clientTxnId.slice(0, 8)}`, status: "PAID", sync_status: "PENDING" };
+      const localTxn = {
+        ...payload,
+        id: `OFFLINE-${clientTxnId.slice(0, 8)}`,
+        status: "PAID",
+        sync_status: "PENDING",
+        ...(paymentMethod === "TUNAI" ? { cash_received: cashReceived, change_amount: changeAmount } : {}),
+      };
       setReceipt(localTxn);
       setCart([]);
       toast.info("Transaksi disimpan offline. Akan disinkronkan saat online.");
@@ -92,7 +122,10 @@ export default function Pos() {
     try {
       const signature = await signTransaction({ clientTxnId, total, deviceId, nonce });
       const { data } = await api.post("/umkm/transactions", { ...payload, signature });
-      setReceipt(data.transaction);
+      setReceipt({
+        ...data.transaction,
+        ...(paymentMethod === "TUNAI" ? { cash_received: cashReceived, change_amount: changeAmount } : {}),
+      });
       setCart([]);
       load();
       try {
@@ -117,6 +150,23 @@ export default function Pos() {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-6" style={{ minHeight: "calc(100vh - 8rem)" }}>
       <div className="lg:col-span-8 flex flex-col">
+        <form onSubmit={handleBarcodeScan} className="mb-3 flex gap-2">
+          <div className="relative flex-1">
+            <ScanLine className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <Input
+              ref={barcodeInputRef}
+              data-testid="barcode-scan-input"
+              aria-label="Scan barcode produk"
+              autoComplete="off"
+              placeholder="Scan barcode untuk menambahkan produk..."
+              value={scanCode}
+              onChange={e => setScanCode(e.target.value)}
+              className="pl-9"
+            />
+          </div>
+          <Button type="submit">Tambah</Button>
+        </form>
+        <p className="-mt-2 mb-4 text-xs text-slate-500">Arahkan fokus ke kolom scan. Produk otomatis masuk setelah scanner membaca kode.</p>
         <div className="flex gap-3 items-center mb-4">
           <div className="flex-1 relative">
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -226,22 +276,30 @@ export default function Pos() {
             <span className="text-sm font-semibold">Total</span>
             <span data-testid="cart-total" className="font-display text-2xl font-extrabold text-[#0A3663]">{rp(total)}</span>
           </div>
-          <div className="grid grid-cols-2 gap-2 pt-2">
+          <div className="grid grid-cols-3 gap-2 pt-2">
             <Button
               data-testid="pay-nfc-btn"
               disabled={cart.length === 0}
               onClick={() => setNfcOpen(true)}
-              className="bg-[#7E22CE] hover:bg-[#6B21A8] h-12 rounded-xl"
+              className="bg-[#7E22CE] hover:bg-[#6B21A8] h-12 rounded-xl px-2"
             >
-              <Nfc className="w-4 h-4 mr-1.5" /> Tap NFC
+              <Nfc className="w-4 h-4 mr-1" /> NFC
             </Button>
             <Button
               data-testid="pay-qris-btn"
               disabled={cart.length === 0}
               onClick={() => setQrisOpen(true)}
-              className="bg-[#1E40AF] hover:bg-[#1E3A8A] h-12 rounded-xl"
+              className="bg-[#1E40AF] hover:bg-[#1E3A8A] h-12 rounded-xl px-2"
             >
-              <QrCode className="w-4 h-4 mr-1.5" /> QRIS
+              <QrCode className="w-4 h-4 mr-1" /> QRIS
+            </Button>
+            <Button
+              data-testid="pay-cash-btn"
+              disabled={cart.length === 0}
+              onClick={() => setCashOpen(true)}
+              className="bg-emerald-700 hover:bg-emerald-800 h-12 rounded-xl px-2"
+            >
+              <Banknote className="w-4 h-4 mr-1" /> Tunai
             </Button>
           </div>
         </div>
@@ -249,6 +307,7 @@ export default function Pos() {
 
       <NfcModal open={nfcOpen} onOpenChange={setNfcOpen} total={total} onPay={submitTransaction} />
       <QrisModal open={qrisOpen} onOpenChange={setQrisOpen} total={total} onPay={submitTransaction} />
+      <CashModal open={cashOpen} onOpenChange={setCashOpen} total={total} onPay={submitTransaction} />
     </div>
   );
 }

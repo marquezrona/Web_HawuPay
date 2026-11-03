@@ -2,18 +2,19 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, CartesianGrid } from "recharts";
-import { Wallet, Receipt, Nfc, QrCode, Package, TrendingUp, CloudUpload } from "lucide-react";
+import { Wallet, Receipt, Nfc, QrCode, Package, TrendingUp, CloudUpload, Banknote } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
 const rp = (n) => "Rp " + Number(n || 0).toLocaleString("id-ID");
 
-function Stat({ label, value, icon: Ic, tint = "#0A3663" }) {
+function Stat({ label, value, icon: Ic, tint = "#0A3663", detail }) {
   return (
     <Card className="p-5 border-[#E5DEC9]">
       <div className="flex items-start justify-between">
         <div>
           <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">{label}</div>
           <div className="font-display text-2xl font-extrabold text-[#0C2340] mt-1">{value}</div>
+          {detail && <div className="text-xs text-slate-500 mt-1">{detail}</div>}
         </div>
         <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: tint + "15" }}>
           <Ic className="w-5 h-5" style={{ color: tint }} />
@@ -42,6 +43,7 @@ export default function UmkmDashboard() {
         <Stat label="Menunggu Sinkron" value={d.pending_sync} icon={CloudUpload} tint="#DC2626" />
         <Stat label="Transaksi NFC" value={d.nfc_count} icon={Nfc} tint="#7E22CE" />
         <Stat label="Transaksi QRIS" value={d.qris_count} icon={QrCode} tint="#1E40AF" />
+        <Stat label="Tunai Hari Ini" value={rp(d.cash_total_today)} icon={Banknote} tint="#047857" detail={`${d.cash_count} transaksi`} />
       </div>
 
       <div className="grid lg:grid-cols-3 gap-6">

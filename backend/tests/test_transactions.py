@@ -129,6 +129,58 @@ class TransactionSettlementTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(settlement["pending_allocation_total"], 100.01)
         self.assertEqual(settlement["unallocated_transactions"], 0)
 
+    async def test_cash_transaction_is_included_in_dashboard_and_reports(self):
+        client_txn_id = str(uuid.uuid4())
+        cash_body = server.TransactionIn(
+            client_txn_id=client_txn_id,
+            items=self.body.items,
+            subtotal=self.body.subtotal,
+            discount=self.body.discount,
+            total=self.body.total,
+            payment_method="TUNAI",
+            cash_received=120,
+            device_id=self.body.device_id,
+            signature=server.sign_transaction(
+                f"{client_txn_id}|{self.body.total}|{self.body.device_id}|{self.body.nonce}"
+            ),
+            nonce=self.body.nonce,
+            created_at_client=self.body.created_at_client,
+        )
+        result = await server.create_transaction(cash_body, self.user)
+
+        self.assertEqual(result["transaction"]["payment_method"], "TUNAI")
+        self.assertEqual(result["transaction"]["cash_received"], 120)
+        self.assertEqual(result["transaction"]["change_amount"], 19.99)
+        dashboard = await server.umkm_dashboard(self.user)
+        report = await server.umkm_reports("daily", self.user)
+        admin_dashboard = await server.admin_dashboard({"id": "test-admin", "role": "admin"})
+
+        self.assertEqual(dashboard["cash_count"], 1)
+        self.assertEqual(dashboard["cash_total_today"], 100.01)
+        self.assertEqual(report["by_method"]["TUNAI"], 100.01)
+        self.assertEqual(report["count"], 1)
+        self.assertEqual(admin_dashboard["cash_count"], 1)
+
+    async def test_cash_transaction_rejects_insufficient_payment(self):
+        body = server.TransactionIn(
+            client_txn_id=str(uuid.uuid4()),
+            items=self.body.items,
+            subtotal=self.body.subtotal,
+            discount=self.body.discount,
+            total=self.body.total,
+            payment_method="TUNAI",
+            cash_received=100,
+            device_id=self.body.device_id,
+            signature="unused",
+            nonce=self.body.nonce,
+            created_at_client=self.body.created_at_client,
+        )
+
+        with self.assertRaises(server.HTTPException) as error:
+            await server.create_transaction(body, self.user)
+
+        self.assertEqual(error.exception.status_code, 400)
+
     async def test_nfc_transaction_deducts_the_matching_umkm_customer_once(self):
         client_txn_id = str(uuid.uuid4())
         device_id = "test-device"
@@ -298,6 +350,26 @@ class ThermalReceiptFormattingTests(unittest.TestCase):
             for line in receipt.splitlines()
         ]
         self.assertLessEqual(max(map(len, printable_lines)), RECEIPT_WIDTH)
+
+    def test_formats_cash_received_and_change_on_thermal_receipt(self):
+        from printing import format_thermal_receipt
+
+        receipt = format_thermal_receipt({
+            "id": "TRX-CASH-001",
+            "created_at": "2026-10-19T02:00:00+00:00",
+            "payment_method": "TUNAI",
+            "items": [{"name": "Nasi Bungkus", "price": 20000, "qty": 1}],
+            "subtotal": 20000,
+            "discount": 0,
+            "total": 20000,
+            "cash_received": 50000,
+            "change_amount": 30000,
+        }, "Toko Uji")
+
+        self.assertIn(b"Uang diterima", receipt)
+        self.assertIn(b"Rp 50.000", receipt)
+        self.assertIn(b"Kembalian", receipt)
+        self.assertIn(b"Rp 30.000", receipt)
 
 
 if __name__ == "__main__":

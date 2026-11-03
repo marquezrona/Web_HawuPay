@@ -29,7 +29,7 @@ Buka PowerShell di folder project:
 ```powershell
 cd backend
 .\.venv\Scripts\Activate.ps1
-uvicorn server:app --host 127.0.0.1 --port 8001 --reload
+uvicorn server:app --host 0.0.0.0 --port 8001 --reload
 ```
 
 Backend tersedia di `http://127.0.0.1:8001`.

@@ -16,7 +16,7 @@ import logging
 from email.message import EmailMessage
 from decimal import Decimal, ROUND_HALF_UP
 from datetime import datetime, timezone, timedelta
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Literal
 
 import bcrypt
 import jwt
@@ -24,6 +24,8 @@ import google.auth
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, WebSocket, WebSocketDisconnect, status
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, EmailStr
@@ -48,10 +50,16 @@ if not JWT_SECRET or not HMAC_SECRET:
 app = FastAPI(title="Kasir UMKM Sabu Raijua API")
 api = APIRouter(prefix="/api")
 
+cors_origins_env = os.environ.get("CORS_ORIGINS", "*")
+if cors_origins_env == "*":
+    origins = ["*"]
+else:
+    origins = [orig.strip() for orig in cors_origins_env.split(",") if orig.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=origins,
+    allow_credentials=True if origins != ["*"] else False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -227,7 +235,7 @@ async def audit(
 # Models
 # ------------------------------------------------------------
 class LoginIn(BaseModel):
-    email: EmailStr
+    email: str
     password: str
 
 
@@ -271,6 +279,7 @@ class ProductIn(BaseModel):
     price: float
     stock: int = 0
     image: Optional[str] = None
+    barcode: Optional[str] = Field(default=None, max_length=128)
 
 
 class ProductDecisionIn(BaseModel):
@@ -298,7 +307,8 @@ class TransactionIn(BaseModel):
     subtotal: float
     discount: float = 0
     total: float
-    payment_method: str  # NFC | QRIS
+    payment_method: Literal["NFC", "QRIS", "TUNAI"]
+    cash_received: Optional[float] = None
     customer_id: Optional[str] = None
     nfc_card_id: Optional[str] = None
     device_id: str
@@ -388,7 +398,9 @@ ws_manager = WSManager()
 # ------------------------------------------------------------
 @api.post("/auth/login")
 async def login(body: LoginIn):
-    email = body.email.lower()
+    email = body.email.strip().lower()
+    if not email or not body.password:
+        raise HTTPException(400, "Email dan password wajib diisi")
     user = await db.users.get_one({"email": email})
     if not user or not verify_password(body.password, user["password_hash"]):
         raise HTTPException(401, "Email atau password salah")
@@ -719,7 +731,7 @@ async def admin_dashboard(user=Depends(require_admin)):
     active_umkms = [u for u in umkms if u.get("active", True)]
     txns_today = await db.transactions.get_many({"created_at__gte": today}, limit=10000)
     total_today = sum(t["total"] for t in txns_today)
-    by_method = {"NFC": 0, "QRIS": 0}
+    by_method = {"NFC": 0, "QRIS": 0, "TUNAI": 0}
     for t in txns_today:
         by_method[t["payment_method"]] = by_method.get(t["payment_method"], 0) + 1
     offline_count = await db.transactions.count({"offline": True})
@@ -756,6 +768,7 @@ async def admin_dashboard(user=Depends(require_admin)):
         "txn_total_today": total_today,
         "nfc_count": by_method.get("NFC", 0),
         "qris_count": by_method.get("QRIS", 0),
+        "cash_count": by_method.get("TUNAI", 0),
         "offline_count": offline_count,
         "pending_sync": pending_sync,
         "total_balance": total_balance,
@@ -986,7 +999,10 @@ async def umkm_dashboard(user=Depends(require_umkm)):
         {"umkm_id": umkm_id, "created_at__gte": today}, limit=10000
     )
     total_today = sum(t["total"] for t in txns_today)
-    by_method = {"NFC": 0, "QRIS": 0}
+    cash_total_today = sum(
+        t["total"] for t in txns_today if t["payment_method"] == "TUNAI"
+    )
+    by_method = {"NFC": 0, "QRIS": 0, "TUNAI": 0}
     for t in txns_today:
         by_method[t["payment_method"]] = by_method.get(t["payment_method"], 0) + 1
 
@@ -1017,6 +1033,8 @@ async def umkm_dashboard(user=Depends(require_umkm)):
         "txn_total_today": total_today,
         "nfc_count": by_method.get("NFC", 0),
         "qris_count": by_method.get("QRIS", 0),
+        "cash_count": by_method.get("TUNAI", 0),
+        "cash_total_today": cash_total_today,
         "offline_count": offline_count,
         "pending_sync": pending_sync,
         "top_products": [{"name": n, "qty": q} for n, q in top_products],
@@ -1039,24 +1057,50 @@ async def list_products(approved_only: bool = False, user=Depends(require_umkm))
 
 @api.post("/umkm/products")
 async def create_product(body: ProductIn, user=Depends(require_umkm)):
+    product_values = body.dict()
+    product_values["barcode"] = (body.barcode or "").strip().upper() or None
+    if product_values["barcode"]:
+        existing = await db.products.get_one({
+            "umkm_id": user["umkm_id"],
+            "barcode": product_values["barcode"],
+        })
+        if existing:
+            raise HTTPException(409, "Kode barcode sudah digunakan produk lain")
+
     p = {
         "id": str(uuid.uuid4()),
         "umkm_id": user["umkm_id"],
-        **body.dict(),
+        **product_values,
         "approval_status": "PENDING",
         "approval_note": "",
         "created_at": now_iso(),
     }
-    await db.products.insert(p)
+    try:
+        await db.products.insert(p)
+    except IntegrityError as exc:
+        raise HTTPException(409, "Kode barcode sudah digunakan produk lain") from exc
     await audit(user["id"], "product_create_pending", {"product_id": p["id"], "name": p["name"]}, user["umkm_id"])
     return p
 
 
 @api.put("/umkm/products/{pid}")
 async def update_product(pid: str, body: ProductIn, user=Depends(require_umkm)):
-    updated = await db.products.update(
-        {"id": pid, "umkm_id": user["umkm_id"]}, body.dict()
-    )
+    product_values = body.dict()
+    product_values["barcode"] = (body.barcode or "").strip().upper() or None
+    if product_values["barcode"]:
+        existing = await db.products.get_one({
+            "umkm_id": user["umkm_id"],
+            "barcode": product_values["barcode"],
+        })
+        if existing and existing["id"] != pid:
+            raise HTTPException(409, "Kode barcode sudah digunakan produk lain")
+
+    try:
+        updated = await db.products.update(
+            {"id": pid, "umkm_id": user["umkm_id"]}, product_values
+        )
+    except IntegrityError as exc:
+        raise HTTPException(409, "Kode barcode sudah digunakan produk lain") from exc
     if not updated:
         raise HTTPException(404, "Produk tidak ditemukan")
     await audit(user["id"], "product_update", {"product_id": pid}, user["umkm_id"])
@@ -1236,6 +1280,12 @@ async def print_transaction_receipt(
 async def create_transaction(body: TransactionIn, user=Depends(require_umkm)):
     umkm_id = user["umkm_id"]
 
+    change_amount = None
+    if body.payment_method == "TUNAI":
+        if body.cash_received is None or body.cash_received < body.total:
+            raise HTTPException(400, "Jumlah uang tunai harus sama atau lebih dari total")
+        change_amount = round(body.cash_received - body.total, 2)
+
     # Idempotency check
     existing = await db.transactions.get_one(
         {"client_txn_id": body.client_txn_id, "umkm_id": umkm_id}
@@ -1271,6 +1321,8 @@ async def create_transaction(body: TransactionIn, user=Depends(require_umkm)):
         "discount": body.discount,
         "total": body.total,
         "payment_method": body.payment_method,
+        "cash_received": body.cash_received if body.payment_method == "TUNAI" else None,
+        "change_amount": change_amount,
         "customer_id": body.customer_id,
         "nfc_card_id": body.nfc_card_id,
         "device_id": body.device_id,
@@ -1390,7 +1442,7 @@ async def umkm_reports(period: str = "daily", user=Depends(require_umkm)):
         {"umkm_id": umkm_id, "created_at__gte": start}, limit=10000
     )
     by_product = {}
-    by_method = {"NFC": 0, "QRIS": 0}
+    by_method = {"NFC": 0, "QRIS": 0, "TUNAI": 0}
     for t in txns:
         by_method[t["payment_method"]] = by_method.get(t["payment_method"], 0) + t["total"]
         for it in t.get("items", []):
@@ -1622,3 +1674,16 @@ async def shutdown():
 
 
 app.include_router(api)
+
+DIST_DIR = ROOT_DIR.parent / "frontend" / "dist"
+if DIST_DIR.exists() and (DIST_DIR / "index.html").exists():
+    if (DIST_DIR / "assets").exists():
+        app.mount("/assets", StaticFiles(directory=str(DIST_DIR / "assets")), name="assets")
+
+    @app.get("/{full_path:path}")
+    async def serve_frontend(full_path: str):
+        file_path = DIST_DIR / full_path
+        if full_path and file_path.is_file():
+            return FileResponse(str(file_path))
+        return FileResponse(str(DIST_DIR / "index.html"))
+

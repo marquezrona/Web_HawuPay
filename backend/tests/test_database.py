@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from sqlalchemy.dialects import mysql
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect
 from sqlalchemy.pool import StaticPool
 from sqlalchemy.schema import CreateTable
 
@@ -53,6 +53,28 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
                 })
                 raise RuntimeError("rollback probe")
         self.assertEqual(await self.database.audit_logs.count(), 0)
+
+    async def test_existing_products_table_gets_barcode_column(self):
+        engine = create_engine(
+            "sqlite+pysqlite:///:memory:",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                "CREATE TABLE products (id VARCHAR(36) NOT NULL PRIMARY KEY, umkm_id VARCHAR(36) NOT NULL)"
+            )
+
+        database = Database(engine)
+        try:
+            await database.create_schema()
+            columns = {column["name"] for column in inspect(engine).get_columns("products")}
+            self.assertIn("barcode", columns)
+            self.assertIn("uq_products_umkm_barcode", {
+                index["name"] for index in inspect(engine).get_indexes("products")
+            })
+        finally:
+            await database.dispose()
 
 
 

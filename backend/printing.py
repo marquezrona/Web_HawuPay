@@ -78,6 +78,9 @@ def format_thermal_receipt(
     chunks.append(b"\x1bE\x00")
     if transaction.get("payment_method") == "NFC" and transaction.get("customer_balance") is not None:
         add_line(_row("Sisa saldo", _amount(transaction["customer_balance"])))
+    if transaction.get("payment_method") == "TUNAI" and transaction.get("cash_received") is not None:
+        add_line(_row("Uang diterima", _amount(transaction["cash_received"])))
+        add_line(_row("Kembalian", _amount(transaction.get("change_amount"))))
     add_line("-" * RECEIPT_WIDTH)
     chunks.append(b"\x1ba\x01")
     add_line("Terima kasih")

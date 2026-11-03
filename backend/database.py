@@ -17,6 +17,7 @@ from sqlalchemy import (
     Column,
     Connection,
     Float,
+    inspect,
     Index,
     Integer,
     JSON,
@@ -94,12 +95,16 @@ products = Table(
     Column("price", Numeric(14, 2), nullable=False, default=0),
     Column("stock", Integer, nullable=False, default=0),
     Column("image", Text),
+    Column("barcode", String(128)),
     Column("approval_status", String(32)),
     Column("approval_note", Text),
     Column("approved_at", String(40)),
     Column("approved_by", String(36)),
     Column("created_at", String(40), nullable=False),
     Index("ix_products_umkm_id", "umkm_id"),
+)
+product_barcode_index = Index(
+    "uq_products_umkm_barcode", products.c.umkm_id, products.c.barcode, unique=True
 )
 
 customers = Table(
@@ -128,6 +133,8 @@ transactions = Table(
     Column("discount", Numeric(14, 2), nullable=False, default=0),
     Column("total", Numeric(14, 2), nullable=False),
     Column("payment_method", String(32), nullable=False),
+    Column("cash_received", Numeric(14, 2)),
+    Column("change_amount", Numeric(14, 2)),
     Column("customer_id", String(36)),
     Column("nfc_card_id", String(255)),
     Column("device_id", String(255)),
@@ -496,12 +503,37 @@ class Database:
         await asyncio.to_thread(sync_check)
 
     async def create_schema(self) -> None:
+        def create_schema_and_migrate(connection):
+            metadata.create_all(connection)
+            transaction_columns = {
+                column["name"]
+                for column in inspect(connection).get_columns("transactions")
+            }
+            for column_name in ("cash_received", "change_amount"):
+                if column_name not in transaction_columns:
+                    connection.exec_driver_sql(
+                        f"ALTER TABLE transactions ADD COLUMN {column_name} NUMERIC(14, 2)"
+                    )
+            product_columns = {
+                column["name"]
+                for column in inspect(connection).get_columns("products")
+            }
+            if "barcode" not in product_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE products ADD COLUMN barcode VARCHAR(128)"
+                )
+            product_barcode_index.create(connection, checkfirst=True)
+
         if isinstance(self.engine, AsyncEngine):
             async with self.engine.begin() as connection:
-                await connection.run_sync(metadata.create_all)
+                await connection.run_sync(create_schema_and_migrate)
             return
 
-        await asyncio.to_thread(metadata.create_all, self.engine)
+        await asyncio.to_thread(self._run_schema_migration, create_schema_and_migrate)
+
+    def _run_schema_migration(self, migration) -> None:
+        with self.engine.begin() as connection:
+            migration(connection)
 
     async def dispose(self) -> None:
         if isinstance(self.engine, AsyncEngine):

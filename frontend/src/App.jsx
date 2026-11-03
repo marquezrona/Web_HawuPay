@@ -37,6 +37,11 @@ function App() {
             <Route path="/reset-password" element={<ResetPassword />} />
             <Route path="/" element={<Navigate to="/login" replace />} />
 
+            {/* Direct convenience routes */}
+            <Route path="/kasir" element={<Navigate to="/umkm/pos" replace />} />
+            <Route path="/pos" element={<Navigate to="/umkm/pos" replace />} />
+            <Route path="/dashboard" element={<Navigate to="/" replace />} />
+
             <Route path="/admin" element={<ProtectedRoute role="admin"><Layout /></ProtectedRoute>}>
               <Route index element={<AdminDashboard />} />
               <Route path="admins" element={<AdminAdmins />} />
@@ -59,6 +64,9 @@ function App() {
               <Route path="reports" element={<Reports />} />
               <Route path="settings" element={<Settings />} />
             </Route>
+
+            {/* Catch-all fallback */}
+            <Route path="*" element={<Navigate to="/login" replace />} />
           </Routes>
         </BrowserRouter>
         <Toaster position="top-right" richColors />

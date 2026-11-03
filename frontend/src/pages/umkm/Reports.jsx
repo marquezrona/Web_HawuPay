@@ -44,7 +44,7 @@ export default function Reports() {
         </div>
       </div>
 
-      <div className="grid md:grid-cols-3 gap-4">
+      <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-4">
         <Card className="p-5 border-[#E5DEC9]">
           <div className="text-[11px] font-bold uppercase text-slate-500">Total Penjualan</div>
           <div className="font-display text-3xl font-extrabold text-[#0A3663] mt-1">{rp(data.total)}</div>
@@ -57,6 +57,10 @@ export default function Reports() {
         <Card className="p-5 border-[#E5DEC9]">
           <div className="text-[11px] font-bold uppercase text-slate-500">QRIS</div>
           <div className="font-display text-3xl font-extrabold text-[#1E40AF] mt-1">{rp(data.by_method.QRIS || 0)}</div>
+        </Card>
+        <Card className="p-5 border-[#E5DEC9]">
+          <div className="text-[11px] font-bold uppercase text-slate-500">Tunai</div>
+          <div className="font-display text-3xl font-extrabold text-emerald-700 mt-1">{rp(data.by_method.TUNAI || 0)}</div>
         </Card>
       </div>
 
