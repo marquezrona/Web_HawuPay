@@ -125,16 +125,16 @@ export default function Login() {
 
       {/* left visual */}
       <div className="relative z-10 hidden items-center justify-center p-12 md:flex md:w-1/2">
-        <div className="relative z-10 max-w-md text-white md:translate-x-[11vw]">
-          <img src="/hawupay-logo.svg" alt="Logo HawuPay" className="mb-7 h-24 w-24 rounded-[1.4rem] shadow-lg" />
-          <h1 className="font-display mb-4 text-4xl font-extrabold leading-[1.05] md:text-5xl">
+        <div className="relative z-10 flex max-w-md flex-col items-center text-center text-white md:scale-[1.2]">
+          <img src="/hawupay-logo.svg" alt="Logo HawuPay" className="mb-5 h-24 w-24 rounded-[1.4rem] shadow-lg" />
+          <h1 className="font-display mb-2 text-4xl font-extrabold leading-[1.05] md:text-5xl">
             Hawu<span className="text-[#E6A100]">Pay</span>
           </h1>
-          <p className="mb-8 max-w-sm text-lg leading-relaxed text-white/85">
+          <p className="max-w-sm text-base leading-relaxed text-white/85 md:text-lg">
             Transaksi UMKM, Lebih Mudah dan Terpercaya
           </p>
-          <div className="flex items-center gap-2 text-sm text-white/60">
-            <Waves className="w-4 h-4" />
+          <div className="mt-8 flex items-center justify-center gap-2 whitespace-nowrap text-sm text-white/60">
+            <Waves className="h-4 w-4 shrink-0" />
             by : TRPL 25 POLIJE SABU RAIJUA
           </div>
         </div>
