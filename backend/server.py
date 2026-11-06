@@ -8,6 +8,7 @@ import os
 import uuid
 import hmac
 import hashlib
+import ipaddress
 import asyncio
 import secrets
 import smtplib
@@ -130,6 +131,11 @@ def _password_reset_digest(purpose: str, value: str) -> str:
     return hmac.new(HMAC_SECRET, message, hashlib.sha256).hexdigest()
 
 
+def _umkm_registration_digest(purpose: str, value: str) -> str:
+    message = f"umkm-registration:{purpose}:{value}".encode("utf-8")
+    return hmac.new(HMAC_SECRET, message, hashlib.sha256).hexdigest()
+
+
 def _validate_email_settings() -> None:
     if not os.getenv("SMTP_HOST") or not (os.getenv("SMTP_FROM") or os.getenv("SMTP_USERNAME")):
         raise RuntimeError("SMTP_HOST dan SMTP_FROM (atau SMTP_USERNAME) harus dikonfigurasi")
@@ -214,7 +220,7 @@ def require_umkm(user=Depends(get_current_user)):
 
 
 async def audit(
-    user_id: str,
+    user_id: Optional[str],
     action: str,
     meta: dict = None,
     umkm_id: str = None,
@@ -259,6 +265,35 @@ class PasswordResetCompleteIn(BaseModel):
 
 class PasswordResetDecisionIn(BaseModel):
     reason: Optional[str] = ""
+
+
+class UmkmRegistrationIn(BaseModel):
+    owner_name: str = Field(min_length=2, max_length=255)
+    store_name: str = Field(min_length=2, max_length=255)
+    email: EmailStr
+    phone: str = Field(min_length=6, max_length=64)
+    business_address: str = Field(min_length=4, max_length=2000)
+    password: str = Field(min_length=8, max_length=128)
+
+
+class UmkmRegistrationDecisionIn(BaseModel):
+    reason: str = Field(min_length=3, max_length=1000)
+
+
+class UmkmRegistrationDetailsIn(BaseModel):
+    token: str = Field(min_length=20, max_length=256)
+    bank_name: Literal["BRI", "Bank NTT", "DANA"]
+    bank_account_number: str = Field(min_length=6, max_length=64)
+    bank_account_name: str = Field(min_length=2, max_length=255)
+
+
+class UmkmRegistrationVerifyIn(BaseModel):
+    token: str = Field(min_length=20, max_length=256)
+    code: str = Field(min_length=6, max_length=6)
+
+
+class UmkmRegistrationTokenIn(BaseModel):
+    token: str = Field(min_length=20, max_length=256)
 
 
 class AdminAccountUpdateIn(BaseModel):
@@ -455,6 +490,249 @@ async def google_login(body: GoogleLoginIn):
             "umkm_id": user.get("umkm_id"),
         },
     }
+
+
+@api.post("/auth/umkm-registration")
+async def submit_umkm_registration(body: UmkmRegistrationIn):
+    email = str(body.email).strip().lower()
+    if await db.users.get_one({"email": email}):
+        raise HTTPException(409, "Email sudah terdaftar")
+
+    previous_request = await db.umkm_registration_requests.get_one({"email": email})
+    if previous_request and previous_request["status"] != "REJECTED":
+        raise HTTPException(409, "Pendaftaran dengan email ini sudah pernah dikirim")
+    if len(body.password.encode("utf-8")) > 72:
+        raise HTTPException(400, "Kata sandi maksimal 72 byte")
+
+    requested_at = now_iso()
+    request_values = {
+        "owner_name": body.owner_name.strip(),
+        "store_name": body.store_name.strip(),
+        "email": email,
+        "password_hash": hash_password(body.password),
+        "phone": body.phone.strip(),
+        "business_address": body.business_address.strip(),
+        "status": "PENDING_ADMIN",
+        "requested_at": requested_at,
+        "reviewed_at": None,
+        "reviewed_by": None,
+        "rejection_reason": None,
+        "continuation_token_hash": None,
+        "continuation_token_expires_at": None,
+        "bank_name": None,
+        "bank_account_number": None,
+        "bank_account_name": None,
+        "email_code_hash": None,
+        "email_code_expires_at": None,
+        "email_code_attempts": 0,
+        "email_verified_at": None,
+    }
+    if not request_values["owner_name"] or not request_values["store_name"] or not request_values["business_address"] or not request_values["phone"]:
+        raise HTTPException(400, "Nama pemilik, nama usaha, nomor telepon, dan alamat tempat usaha wajib diisi")
+
+    request_id = previous_request["id"] if previous_request else str(uuid.uuid4())
+    try:
+        if previous_request:
+            await db.umkm_registration_requests.update({"id": request_id}, request_values)
+        else:
+            await db.umkm_registration_requests.insert({"id": request_id, **request_values})
+    except IntegrityError as exc:
+        raise HTTPException(409, "Pendaftaran dengan email ini sudah pernah dikirim") from exc
+
+    await audit(
+        None,
+        "umkm_registration_submitted",
+        {"request_id": request_id, "store_name": request_values["store_name"]},
+    )
+    return {"ok": True, "message": "Pendaftaran terkirim dan menunggu verifikasi admin."}
+
+
+@api.post("/auth/umkm-registration/details")
+async def submit_umkm_registration_details(body: UmkmRegistrationDetailsIn):
+    token_hash = _umkm_registration_digest("continuation-token", body.token)
+    registration = await db.umkm_registration_requests.get_one({
+        "continuation_token_hash": token_hash,
+        "status": "AWAITING_DETAILS",
+    })
+    if not registration:
+        raise HTTPException(400, "Tautan pendaftaran tidak valid atau sudah digunakan")
+    if _parse_expiry(registration["continuation_token_expires_at"]) <= datetime.now(timezone.utc):
+        await db.umkm_registration_requests.update(
+            {"id": registration["id"]}, {"status": "EXPIRED"}
+        )
+        raise HTTPException(400, "Tautan pendaftaran kedaluwarsa. Hubungi admin.")
+    if await db.users.get_one({"email": registration["email"]}):
+        raise HTTPException(409, "Email sudah digunakan oleh akun lain")
+
+    account_number = body.bank_account_number.strip().replace(" ", "")
+    account_name = body.bank_account_name.strip()
+    if not account_number.isdigit():
+        raise HTTPException(400, "Nomor rekening atau nomor HP DANA hanya boleh berisi angka")
+    if len(account_name) < 2:
+        raise HTTPException(400, "Nama pemilik rekening wajib diisi")
+
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    code_expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+    await db.umkm_registration_requests.update(
+        {"id": registration["id"], "status": "AWAITING_DETAILS"},
+        {
+            "bank_name": body.bank_name,
+            "bank_account_number": account_number,
+            "bank_account_name": account_name,
+            "email_code_hash": _umkm_registration_digest(
+                "email-code", f"{registration['id']}:{code}"
+            ),
+            "email_code_expires_at": code_expires_at.isoformat(),
+            "email_code_attempts": 0,
+            "status": "AWAITING_EMAIL",
+        },
+    )
+    try:
+        await _deliver_email(
+            registration["email"],
+            "Kode verifikasi pendaftaran UMKM HawuPay",
+            f"Kode verifikasi email Anda: {code}\n\nKode berlaku selama 10 menit. Masukkan kode ini untuk mengaktifkan akun kasir HawuPay.",
+        )
+    except HTTPException:
+        await db.umkm_registration_requests.update(
+            {"id": registration["id"]}, {"status": "EMAIL_DELIVERY_FAILED"}
+        )
+        raise
+    return {"ok": True, "message": "Kode verifikasi telah dikirim ke email Anda."}
+
+
+@api.post("/auth/umkm-registration/resend-code")
+async def resend_umkm_registration_code(body: UmkmRegistrationTokenIn):
+    token_hash = _umkm_registration_digest("continuation-token", body.token)
+    registration = await db.umkm_registration_requests.get_one({
+        "continuation_token_hash": token_hash,
+        "status__in": ["AWAITING_EMAIL", "EMAIL_DELIVERY_FAILED"],
+    })
+    if not registration:
+        raise HTTPException(400, "Tautan pendaftaran tidak valid atau kedaluwarsa")
+    if _parse_expiry(registration["continuation_token_expires_at"]) <= datetime.now(timezone.utc):
+        await db.umkm_registration_requests.update(
+            {"id": registration["id"]}, {"status": "EXPIRED"}
+        )
+        raise HTTPException(400, "Tautan pendaftaran kedaluwarsa. Hubungi admin.")
+
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    await db.umkm_registration_requests.update(
+        {"id": registration["id"]},
+        {
+            "email_code_hash": _umkm_registration_digest(
+                "email-code", f"{registration['id']}:{code}"
+            ),
+            "email_code_expires_at": (
+                datetime.now(timezone.utc) + timedelta(minutes=10)
+            ).isoformat(),
+            "email_code_attempts": 0,
+            "status": "AWAITING_EMAIL",
+        },
+    )
+    try:
+        await _deliver_email(
+            registration["email"],
+            "Kode verifikasi pendaftaran UMKM HawuPay",
+            f"Kode verifikasi email Anda: {code}\n\nKode berlaku selama 10 menit. Masukkan kode ini untuk mengaktifkan akun kasir HawuPay.",
+        )
+    except HTTPException:
+        await db.umkm_registration_requests.update(
+            {"id": registration["id"]}, {"status": "EMAIL_DELIVERY_FAILED"}
+        )
+        raise
+    return {"ok": True, "message": "Kode verifikasi baru telah dikirim ke email Anda."}
+
+
+@api.post("/auth/umkm-registration/verify-email")
+async def verify_umkm_registration_email(body: UmkmRegistrationVerifyIn):
+    token_hash = _umkm_registration_digest("continuation-token", body.token)
+    registration = await db.umkm_registration_requests.get_one({
+        "continuation_token_hash": token_hash,
+        "status": "AWAITING_EMAIL",
+    })
+    if not registration:
+        raise HTTPException(400, "Pendaftaran tidak ditemukan atau sudah selesai")
+    if _parse_expiry(registration["continuation_token_expires_at"]) <= datetime.now(timezone.utc):
+        await db.umkm_registration_requests.update(
+            {"id": registration["id"]}, {"status": "EXPIRED"}
+        )
+        raise HTTPException(400, "Tautan pendaftaran kedaluwarsa. Hubungi admin.")
+    if not body.code.isdigit():
+        raise HTTPException(400, "Kode verifikasi tidak valid")
+    if _parse_expiry(registration["email_code_expires_at"]) <= datetime.now(timezone.utc):
+        raise HTTPException(400, "Kode verifikasi kedaluwarsa. Minta kode baru.")
+    if registration["email_code_attempts"] >= 5:
+        raise HTTPException(400, "Batas percobaan terlampaui. Minta kode OTP baru.")
+
+    expected = _umkm_registration_digest(
+        "email-code", f"{registration['id']}:{body.code}"
+    )
+    if not hmac.compare_digest(expected, registration["email_code_hash"]):
+        attempts = registration["email_code_attempts"] + 1
+        await db.umkm_registration_requests.update(
+            {"id": registration["id"]}, {"email_code_attempts": attempts}
+        )
+        raise HTTPException(400, "Kode verifikasi tidak valid")
+
+    if await db.users.get_one({"email": registration["email"]}):
+        raise HTTPException(409, "Email sudah digunakan oleh akun lain")
+
+    umkm_id = str(uuid.uuid4())
+    user_id = str(uuid.uuid4())
+    created_at = now_iso()
+    try:
+        async with db.transaction() as transaction:
+            await transaction.umkms.insert({
+                "id": umkm_id,
+                "store_name": registration["store_name"],
+                "address": registration["business_address"],
+                "phone": registration["phone"],
+                "logo": None,
+                "owner_user_id": user_id,
+                "balance": 0,
+                "active": True,
+                "created_at": created_at,
+            })
+            await transaction.users.insert({
+                "id": user_id,
+                "email": registration["email"],
+                "password_hash": registration["password_hash"],
+                "name": registration["owner_name"],
+                "role": "umkm",
+                "umkm_id": umkm_id,
+                "created_at": created_at,
+            })
+            await transaction.umkm_payout_accounts.insert({
+                "id": str(uuid.uuid4()),
+                "umkm_id": umkm_id,
+                "bank_name": registration["bank_name"],
+                "account_number": registration["bank_account_number"],
+                "account_name": registration["bank_account_name"],
+                "verification_status": "PENDING_VERIFICATION",
+                "created_at": created_at,
+                "verified_at": None,
+                "verified_by": None,
+            })
+            await transaction.umkm_registration_requests.update(
+                {"id": registration["id"], "status": "AWAITING_EMAIL"},
+                {
+                    "status": "COMPLETED",
+                    "email_verified_at": created_at,
+                    "continuation_token_hash": None,
+                    "email_code_hash": None,
+                },
+            )
+    except IntegrityError as exc:
+        raise HTTPException(409, "Email sudah digunakan oleh akun lain") from exc
+
+    await audit(
+        user_id,
+        "umkm_registration_completed",
+        {"request_id": registration["id"], "store_name": registration["store_name"]},
+        umkm_id,
+    )
+    return {"ok": True, "message": "Email terverifikasi. Akun kasir Anda sudah aktif."}
 
 
 @api.post("/auth/password-reset/request")
@@ -777,6 +1055,156 @@ async def admin_dashboard(user=Depends(require_admin)):
         "top_umkms": top_list,
         "recent_transactions": recent,
     }
+
+
+@api.get("/admin/umkm-registrations")
+async def list_umkm_registration_requests(user=Depends(require_admin)):
+    requests = await db.umkm_registration_requests.get_many(
+        {"status__in": ["PENDING_ADMIN", "EXPIRED"]},
+        order_by=("requested_at", "desc"),
+        limit=500,
+    )
+    return [{
+        "id": request["id"],
+        "owner_name": request["owner_name"],
+        "store_name": request["store_name"],
+        "email": request["email"],
+        "phone": request["phone"],
+        "business_address": request["business_address"],
+        "requested_at": request["requested_at"],
+        "status": request["status"],
+    } for request in requests]
+
+
+@api.post("/admin/umkm-registrations/{request_id}/approve")
+async def approve_umkm_registration(
+    request_id: str,
+    request: Request,
+    user=Depends(require_admin),
+):
+    registration = await db.umkm_registration_requests.get_one({
+        "id": request_id,
+        "status__in": ["PENDING_ADMIN", "EXPIRED"],
+    })
+    if not registration:
+        raise HTTPException(404, "Pendaftaran UMKM tidak ditemukan")
+    if await db.users.get_one({"email": registration["email"]}):
+        raise HTTPException(409, "Email sudah digunakan oleh akun lain")
+
+    token = secrets.token_urlsafe(32)
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=48)
+    token_hash = _umkm_registration_digest("continuation-token", token)
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
+    continuation_link = f"{frontend_url}/complete-registration?token={token}"
+
+    try:
+        _validate_email_settings()
+    except RuntimeError as exc:
+        client_host = request.client.host if request.client else ""
+        is_loopback = False
+        try:
+            is_loopback = ipaddress.ip_address(client_host).is_loopback
+        except ValueError:
+            pass
+        if os.getenv("UMKM_REGISTRATION_DEV_LINK", "").lower() != "true" or not is_loopback:
+            raise HTTPException(503, str(exc)) from exc
+
+        await db.umkm_registration_requests.update(
+            {"id": request_id, "status__in": ["PENDING_ADMIN", "EXPIRED"]},
+            {
+                "status": "AWAITING_DETAILS",
+                "continuation_token_hash": token_hash,
+                "continuation_token_expires_at": expires_at.isoformat(),
+                "reviewed_at": now_iso(),
+                "reviewed_by": user["id"],
+            },
+        )
+        await audit(
+            user["id"],
+            "umkm_registration_approved_dev_link",
+            {"request_id": request_id, "store_name": registration["store_name"]},
+        )
+        return {
+            "ok": True,
+            "email_sent": False,
+            "development_link": continuation_link,
+        }
+
+    await _deliver_email(
+        registration["email"],
+        "Pendaftaran UMKM HawuPay disetujui",
+        (
+            f"Halo {registration['owner_name']},\n\n"
+            "Admin telah menyetujui pendaftaran UMKM Anda. "
+            "Lanjutkan pendaftaran dengan mengisi rekening tujuan pencairan melalui tautan berikut "
+            "(berlaku 48 jam dan hanya dapat digunakan sekali):\n"
+            f"{continuation_link}\n\n"
+            "Setelah mengisi data rekening, masukkan kode OTP yang dikirim ke email ini untuk mengaktifkan akun kasir."
+        ),
+    )
+    await db.umkm_registration_requests.update(
+        {"id": request_id, "status__in": ["PENDING_ADMIN", "EXPIRED"]},
+        {
+            "status": "AWAITING_DETAILS",
+            "continuation_token_hash": _umkm_registration_digest(
+                "continuation-token", token
+            ),
+            "continuation_token_expires_at": expires_at.isoformat(),
+            "reviewed_at": now_iso(),
+            "reviewed_by": user["id"],
+        },
+    )
+    await audit(
+        user["id"],
+        "umkm_registration_approved",
+        {"request_id": request_id, "store_name": registration["store_name"]},
+    )
+    return {"ok": True, "email_sent": True}
+
+
+@api.post("/admin/umkm-registrations/{request_id}/reject")
+async def reject_umkm_registration(
+    request_id: str,
+    body: UmkmRegistrationDecisionIn,
+    user=Depends(require_admin),
+):
+    registration = await db.umkm_registration_requests.get_one({
+        "id": request_id,
+        "status__in": ["PENDING_ADMIN", "EXPIRED"],
+    })
+    if not registration:
+        raise HTTPException(404, "Pendaftaran UMKM tidak ditemukan")
+    try:
+        _validate_email_settings()
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc)) from exc
+
+    reason = body.reason.strip()
+    if len(reason) < 3:
+        raise HTTPException(400, "Alasan penolakan minimal 3 karakter")
+    await _deliver_email(
+        registration["email"],
+        "Status pendaftaran UMKM HawuPay",
+        (
+            "Mohon maaf, pendaftaran UMKM Anda belum dapat disetujui.\n\n"
+            f"Catatan admin: {reason or 'Silakan hubungi admin untuk informasi lebih lanjut.'}"
+        ),
+    )
+    await db.umkm_registration_requests.update(
+        {"id": request_id, "status__in": ["PENDING_ADMIN", "EXPIRED"]},
+        {
+            "status": "REJECTED",
+            "reviewed_at": now_iso(),
+            "reviewed_by": user["id"],
+            "rejection_reason": reason,
+        },
+    )
+    await audit(
+        user["id"],
+        "umkm_registration_rejected",
+        {"request_id": request_id, "store_name": registration["store_name"]},
+    )
+    return {"ok": True}
 
 
 @api.get("/admin/umkms")
@@ -1686,4 +2114,3 @@ if DIST_DIR.exists() and (DIST_DIR / "index.html").exists():
         if full_path and file_path.is_file():
             return FileResponse(str(file_path))
         return FileResponse(str(DIST_DIR / "index.html"))
-

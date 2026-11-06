@@ -153,3 +153,28 @@ CREATE TABLE IF NOT EXISTS password_reset_requests (
     INDEX ix_password_reset_user_status (user_id, status),
     INDEX ix_password_reset_status_requested (status, requested_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS umkm_registration_requests (
+    id VARCHAR(36) NOT NULL PRIMARY KEY,
+    owner_name VARCHAR(255) NOT NULL,
+    store_name VARCHAR(255) NOT NULL,
+    email VARCHAR(255) NOT NULL UNIQUE,
+    password_hash VARCHAR(255) NOT NULL,
+    phone VARCHAR(64) NOT NULL,
+    business_address TEXT NOT NULL,
+    status VARCHAR(32) NOT NULL,
+    requested_at VARCHAR(40) NOT NULL,
+    reviewed_at VARCHAR(40) NULL,
+    reviewed_by VARCHAR(36) NULL,
+    rejection_reason TEXT NULL,
+    continuation_token_hash VARCHAR(64) NULL,
+    continuation_token_expires_at VARCHAR(40) NULL,
+    bank_name VARCHAR(64) NULL,
+    bank_account_number VARCHAR(64) NULL,
+    bank_account_name VARCHAR(255) NULL,
+    email_code_hash VARCHAR(64) NULL,
+    email_code_expires_at VARCHAR(40) NULL,
+    email_code_attempts INT NOT NULL DEFAULT 0,
+    email_verified_at VARCHAR(40) NULL,
+    INDEX ix_umkm_registration_status_requested (status, requested_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

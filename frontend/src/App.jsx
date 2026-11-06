@@ -5,6 +5,8 @@ import { Toaster } from "@/components/ui/sonner";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import Layout from "@/components/Layout";
 import Login from "@/pages/Login";
+import RegisterUmkm from "@/pages/RegisterUmkm";
+import CompleteUmkmRegistration from "@/pages/CompleteUmkmRegistration";
 import ForgotPassword from "@/pages/ForgotPassword";
 import ResetPassword from "@/pages/ResetPassword";
 import AdminDashboard from "@/pages/admin/AdminDashboard";
@@ -33,6 +35,8 @@ function App() {
         <BrowserRouter>
           <Routes>
             <Route path="/login" element={<Login />} />
+            <Route path="/register" element={<RegisterUmkm />} />
+            <Route path="/complete-registration" element={<CompleteUmkmRegistration />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route path="/reset-password" element={<ResetPassword />} />
             <Route path="/" element={<Navigate to="/login" replace />} />
@@ -40,7 +44,7 @@ function App() {
             {/* Direct convenience routes */}
             <Route path="/kasir" element={<Navigate to="/umkm/pos" replace />} />
             <Route path="/pos" element={<Navigate to="/umkm/pos" replace />} />
-            <Route path="/dashboard" element={<Navigate to="/" replace />} />
+            <Route path="/dashboard" element={<Navigate to="/login" replace />} />
 
             <Route path="/admin" element={<ProtectedRoute role="admin"><Layout /></ProtectedRoute>}>
               <Route index element={<AdminDashboard />} />

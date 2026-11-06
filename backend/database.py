@@ -222,9 +222,36 @@ password_reset_requests = Table(
     Index("ix_password_reset_status_requested", "status", "requested_at"),
 )
 
+umkm_registration_requests = Table(
+    "umkm_registration_requests",
+    metadata,
+    Column("id", String(36), primary_key=True),
+    Column("owner_name", String(255), nullable=False),
+    Column("store_name", String(255), nullable=False),
+    Column("email", String(255), nullable=False, unique=True),
+    Column("password_hash", String(255), nullable=False),
+    Column("phone", String(64), nullable=False),
+    Column("business_address", Text, nullable=False),
+    Column("status", String(32), nullable=False),
+    Column("requested_at", String(40), nullable=False),
+    Column("reviewed_at", String(40)),
+    Column("reviewed_by", String(36)),
+    Column("rejection_reason", Text),
+    Column("continuation_token_hash", String(64)),
+    Column("continuation_token_expires_at", String(40)),
+    Column("bank_name", String(64)),
+    Column("bank_account_number", String(64)),
+    Column("bank_account_name", String(255)),
+    Column("email_code_hash", String(64)),
+    Column("email_code_expires_at", String(40)),
+    Column("email_code_attempts", Integer, nullable=False, default=0),
+    Column("email_verified_at", String(40)),
+    Index("ix_umkm_registration_status_requested", "status", "requested_at"),
+)
+
 TABLES = {
     table.name: table
-    for table in (users, umkms, umkm_payout_accounts, products, customers, transactions, receipt_print_jobs, audit_logs, settlement_config, settlement_allocations, password_reset_requests)
+    for table in (users, umkms, umkm_payout_accounts, products, customers, transactions, receipt_print_jobs, audit_logs, settlement_config, settlement_allocations, password_reset_requests, umkm_registration_requests)
 }
 
 

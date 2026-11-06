@@ -56,6 +56,23 @@ npm run dev
 
 Setelah keduanya berjalan, buka alamat frontend yang ditampilkan oleh Vite di terminal.
 
+## Pendaftaran UMKM
+
+Calon UMKM dapat mendaftar melalui tautan **Daftar sebagai UMKM** di halaman login. Pendaftaran
+awal akan masuk ke antrean verifikasi pada menu **Daftar UMKM** di panel admin. Setelah disetujui,
+sistem mengirim tautan untuk mengisi rekening pencairan; akun kasir baru aktif setelah kode OTP
+email berhasil diverifikasi. Rekening payout tetap berstatus menunggu verifikasi admin.
+
+Pengiriman tautan dan kode membutuhkan konfigurasi SMTP pada `backend/.env` (`SMTP_HOST`,
+`SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, dan `SMTP_FROM`). Atur `FRONTEND_URL` ke alamat
+frontend yang benar, terutama saat hosting, agar tautan persetujuan mengarah ke situs yang
+dipublikasikan. Jangan menyimpan kredensial SMTP di repositori.
+
+Untuk pengujian lokal tanpa SMTP, `UMKM_REGISTRATION_DEV_LINK=true` dapat menampilkan tautan
+lanjutan di panel admin saat permintaan berasal dari localhost. Tautan tidak dikirim melalui
+email; opsi ini hanya untuk pengembangan lokal dan harus tetap `false` atau tidak disetel saat
+hosting/produksi.
+
 ## Pemeriksaan layanan
 
 Backend menyediakan endpoint pemeriksaan kesehatan yang dapat dibuka ketika layanan berjalan:
